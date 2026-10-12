@@ -43,4 +43,4 @@
 - [x] Запустить GUI под Xvfb, получить снимок окна через MCP и проверить PNG.
 - [x] Собрать Linux app-image с включённым runtime и запустить headless MCP из пакета.
 - [ ] Повторить GUI и MCP acceptance на нативных экранах и Windows/macOS.
-- [ ] Сделать этапный commit и push ветки в `origin`.
+- [x] Сделать этапный commit и push ветки в `origin` (commit `e8235a0`, `feat/java-mcp-lab-suite`).
