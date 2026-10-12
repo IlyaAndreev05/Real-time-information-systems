@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "example-harmonic-signal",
+  "name": "Тестовый гармонический сигнал",
+  "createdAt": "2026-10-12T00:00:00Z",
+  "updatedAt": "2026-10-12T00:00:00Z",
+  "moduleId": "spectrum",
+  "algorithmId": "fourier",
+  "input": [
+    { "x": 0.0, "y": 0.0 },
+    { "x": 0.125, "y": 1.0 },
+    { "x": 0.25, "y": 0.0 },
+    { "x": 0.375, "y": -1.0 },
+    { "x": 0.5, "y": 0.0 },
+    { "x": 0.625, "y": 1.0 },
+    { "x": 0.75, "y": 0.0 },
+    { "x": 0.875, "y": -1.0 },
+    { "x": 1.0, "y": 0.0 }
+  ],
+  "result": [],
+  "parameters": {},
+  "metrics": {},
+  "noiseSeed": 4319,
+  "chartTitle": "Два периода синусоидального сигнала",
+  "xAxisLabel": "Время, с",
+  "yAxisLabel": "Амплитуда",
+  "showGrid": true
+}

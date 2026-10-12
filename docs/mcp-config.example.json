@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rtis-lab-suite": {
+      "command": "./mvnw",
+      "args": ["-q", "exec:java", "-Dexec.args=--mcp-stdio"],
+      "cwd": "/path/to/Real-time-information-systems"
+    }
+  }
+}
