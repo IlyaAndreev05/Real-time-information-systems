@@ -5,8 +5,11 @@ import org.jfree.chart.JFreeChart;
 import org.jfree.chart.ChartUtils;
 import org.jfree.chart.plot.PlotOrientation;
 import org.jfree.chart.plot.XYPlot;
+import org.jfree.chart.plot.IntervalMarker;
+import org.jfree.chart.plot.ValueMarker;
 import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
 import org.jfree.chart.title.LegendTitle;
+import org.jfree.chart.ui.Layer;
 import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 import ru.ilyaandreev.rtis.model.LabProject;
@@ -19,6 +22,7 @@ import java.nio.file.Path;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.geom.Ellipse2D;
 import java.util.List;
 
 public final class ChartRenderer {
@@ -47,6 +51,35 @@ public final class ChartRenderer {
         JFreeChart chart = ChartFactory.createXYLineChart(title, xAxis,
             project.getYAxisLabel(), data, PlotOrientation.VERTICAL, true, true, false);
         style(chart, project.isShowGrid());
+        XYPlot plot = chart.getXYPlot();
+        if (!spectrum && project.getInput().isEmpty()) {
+            // Keep the first manual clicks in a useful, stable working area.
+            plot.getDomainAxis().setRange(0, 1);
+            plot.getRangeAxis().setRange(-1, 1);
+        }
+        if (spectrum) {
+            int last = project.getResult().size() - 1;
+            int low = Math.min(last, project.getSpectrumLowHarmonic());
+            int high = Math.min(last, Math.max(low, project.getSpectrumHighHarmonic()));
+            double lowHz = project.getResult().get(low).x();
+            double highHz = project.getResult().get(high).x();
+            if (highHz > lowHz) {
+                plot.getDomainAxis().setRange(lowHz, highHz);
+                Color tint = project.isNotchFilterEnabled() ? new Color(220, 38, 38, 30) : new Color(37, 99, 235, 28);
+                IntervalMarker selection = new IntervalMarker(lowHz, highHz, tint);
+                selection.setOutlinePaint(project.isNotchFilterEnabled() ? new Color(220, 38, 38, 150) : new Color(37, 99, 235, 120));
+                plot.addDomainMarker(selection, Layer.BACKGROUND);
+            }
+            int selected = project.getSelectedHarmonic();
+            if (selected >= 0 && selected < project.getResult().size()) {
+                ValueMarker marker = new ValueMarker(project.getResult().get(selected).x(), new Color(234, 88, 12, 230),
+                    new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10, new float[]{4, 3}, 0));
+                plot.addDomainMarker(marker, Layer.FOREGROUND);
+            }
+        } else if (!project.getInput().isEmpty()) {
+            ValueMarker cursor = new ValueMarker(project.getMeasurementCursorX(), new Color(220, 38, 38, 210), new BasicStroke(1.4f));
+            plot.addDomainMarker(cursor, Layer.FOREGROUND);
+        }
         return chart;
     }
 
@@ -91,7 +124,15 @@ public final class ChartRenderer {
         for (int i = 0; i < plot.getDataset().getSeriesCount(); i++) {
             renderer.setSeriesPaint(i, colors[i % colors.length]);
             renderer.setSeriesStroke(i, new BasicStroke(2.0f));
+            if (i == 0) {
+                renderer.setSeriesShapesVisible(i, true);
+                renderer.setSeriesShape(i, new Ellipse2D.Double(-3, -3, 6, 6));
+                renderer.setSeriesFillPaint(i, new Color(220, 38, 38));
+                renderer.setSeriesOutlinePaint(i, new Color(185, 28, 28));
+            }
         }
+        renderer.setDrawOutlines(true);
+        renderer.setUseFillPaint(true);
         plot.setRenderer(renderer);
         LegendTitle legend = chart.getLegend();
         if (legend != null) {

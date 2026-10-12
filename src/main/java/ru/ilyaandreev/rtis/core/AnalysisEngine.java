@@ -13,6 +13,9 @@ import java.util.function.BooleanSupplier;
 
 /** Numeric calculations used by the GUI and MCP interfaces. */
 public final class AnalysisEngine {
+    /** SRV's graph was 430 horizontal pixels wide; use the same dense visual sampling. */
+    private static final int MANUAL_INTERPOLATION_SAMPLES = 430;
+
     private AnalysisEngine() { }
 
     public static ExperimentResult run(LabProject project, long inputRevision, BooleanSupplier cancelled) {
@@ -26,9 +29,10 @@ public final class AnalysisEngine {
             case "fourier" -> output = fourier(source, cancelled);
             case "autocorrelation" -> output = autocorrelation(source, cancelled);
             case "sample-hold", "linear-reconstruction" -> {
-                List<Point> knots = SignalMath.sample(source, integer(p, "stride", 4));
-                output = algorithm.equals("sample-hold") ? SignalMath.stepInterpolate(knots, xValues(source)) : SignalMath.linearInterpolate(knots, xValues(source));
-                metrics.put("узловыхТочек", (double) knots.size());
+                List<Point> knots = interpolationKnots(project, source, p);
+                List<Double> xs = interpolationXValues(project, source);
+                output = algorithm.equals("sample-hold") ? SignalMath.stepInterpolate(knots, xs) : SignalMath.linearInterpolate(knots, xs);
+                addInterpolationMetrics(project, knots, output, metrics);
             }
             case "quantize", "adc-dac", "quantization-error" -> {
                 int bits = integer(p, "bits", 8);
@@ -40,14 +44,14 @@ public final class AnalysisEngine {
                 metrics.put("теоретическаяМаксПогрешность", (max - min) / (2 * ((1L << bits) - 1)));
             }
             case "step-interpolation", "linear-interpolation", "cubic-spline" -> {
-                List<Point> knots = SignalMath.sample(source, integer(p, "stride", 4));
-                List<Double> xs = xValues(source);
+                List<Point> knots = interpolationKnots(project, source, p);
+                List<Double> xs = interpolationXValues(project, source);
                 output = switch (algorithm) {
                     case "step-interpolation" -> SignalMath.stepInterpolate(knots, xs);
                     case "linear-interpolation" -> SignalMath.linearInterpolate(knots, xs);
                     default -> SignalMath.cubicSpline(knots, xs);
                 };
-                metrics.put("узловыхТочек", (double) knots.size());
+                addInterpolationMetrics(project, knots, output, metrics);
             }
             case "add-noise" -> output = SignalMath.addGaussianNoise(source, p.getOrDefault("standardDeviation", 0.1), project.getNoiseSeed());
             case "moving-average" -> output = movingAverage(source, integer(p, "window", 5), cancelled);
@@ -71,6 +75,34 @@ public final class AnalysisEngine {
         }
         checkCancelled(cancelled);
         return new ExperimentResult(UUID.randomUUID().toString(), project.getModuleId(), algorithm, inputRevision, output, metrics);
+    }
+
+    private static List<Point> interpolationKnots(LabProject project, List<Point> source, Map<String, Double> parameters) {
+        return "controlPoints".equals(project.getInputKind())
+            ? source
+            : SignalMath.sample(source, integer(parameters, "stride", 4));
+    }
+
+    private static List<Double> interpolationXValues(LabProject project, List<Point> source) {
+        return "controlPoints".equals(project.getInputKind())
+            ? SignalMath.interpolationGrid(source, MANUAL_INTERPOLATION_SAMPLES)
+            : xValues(source);
+    }
+
+    private static void addInterpolationMetrics(LabProject project, List<Point> knots, List<Point> output,
+                                                Map<String, Double> metrics) {
+        metrics.put("узловыхТочек", (double) knots.size());
+        metrics.put("точекВосстановления", (double) output.size());
+        if ("controlPoints".equals(project.getInputKind())) {
+            double sum = 0, max = 0;
+            for (Point knot : knots) {
+                double error = Math.abs(knot.y() - SignalMath.interpolateAt(output, knot.x()).y());
+                sum += error * error;
+                max = Math.max(max, error);
+            }
+            metrics.put("среднеквадратичнаяОшибкаНаУзлах", Math.sqrt(sum / knots.size()));
+            metrics.put("максимальнаяОшибкаНаУзлах", max);
+        }
     }
 
     private static List<Point> fourier(List<Point> input, BooleanSupplier cancelled) {

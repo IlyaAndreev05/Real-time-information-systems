@@ -48,10 +48,25 @@ public final class ProjectSession {
         synchronized (this) {
             next = Objects.requireNonNull(operation.apply(project.copy()));
             next.setUpdatedAt(Instant.now().toString());
+            next.setResult(java.util.List.of());
+            next.setMetrics(java.util.Map.of());
+            store.save(autosavePath, next);
             project = next.copy();
             revision++;
             latestResult = null;
-            store.save(autosavePath, project);
+            next = project.copy();
+        }
+        notifyListeners(next);
+    }
+
+    /** Persists a presentation-only edit without invalidating the numeric result revision. */
+    public void updatePresentation(UnaryOperator<LabProject> operation) throws IOException {
+        LabProject next;
+        synchronized (this) {
+            next = Objects.requireNonNull(operation.apply(project.copy()));
+            next.setUpdatedAt(Instant.now().toString());
+            store.save(autosavePath, next);
+            project = next.copy();
             next = project.copy();
         }
         notifyListeners(next);
@@ -59,7 +74,16 @@ public final class ProjectSession {
 
     public void replaceFrom(Path file) throws IOException {
         LabProject incoming = store.load(file); // Fully parse before changing the live session.
-        update(ignored -> incoming);
+        LabProject snapshot;
+        synchronized (this) {
+            incoming.setUpdatedAt(Instant.now().toString());
+            store.save(autosavePath, incoming);
+            project = incoming.copy();
+            revision++;
+            latestResult = null;
+            snapshot = project.copy();
+        }
+        notifyListeners(snapshot);
     }
 
     public void saveAs(Path file) throws IOException { store.save(file, snapshot()); }

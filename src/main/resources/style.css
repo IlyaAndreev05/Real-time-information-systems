@@ -12,3 +12,22 @@
 .list-cell { -fx-padding: 10px; -fx-border-color: transparent transparent #e8edf3 transparent; }
 .list-cell:selected { -fx-background-color: #eaf1ff; -fx-text-fill: #173c8d; }
 .table-view { -fx-background-radius: 6px; -fx-border-color: #dbe4ee; }
+.module-title { -fx-font-size: 13px; -fx-font-weight: 600; -fx-text-fill: #1e293b; }
+.lab-badge {
+    -fx-font-size: 10px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #475569;
+    -fx-background-color: #eef2f7;
+    -fx-background-radius: 8px;
+    -fx-padding: 2px 7px;
+}
+.stepper-button {
+    -fx-min-width: 28px;
+    -fx-pref-width: 28px;
+    -fx-padding: 4px 6px;
+    -fx-background-color: #f1f5f9;
+    -fx-border-color: #cbd5e1;
+    -fx-border-radius: 5px;
+    -fx-background-radius: 5px;
+}
+.stepper-button:hover { -fx-background-color: #e2e8f0; }
