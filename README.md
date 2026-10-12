@@ -1,38 +1,166 @@
 # Информационные системы реального времени
 
-Кроссплатформенное Java-приложение для лабораторного практикума: GUI на JavaFX, отдельный MCP-сервер и совместный режим GUI + MCP. Это начальный этап переноса, а не законченная замена оригинальных программ: часть расчётов пока прототипы, и ни один алгоритм ещё не сверен с оригинальным EXE. Точные статусы и пробелы перечислены в [матрице функций](docs/feature-matrix.md) и [TODO.md](TODO.md).
+Кроссплатформенное Java-приложение для лабораторного практикума. Программа запускается как графическое приложение, как MCP-сервер без окна и совместно — GUI + MCP. Перенос ещё продолжается: часть расчётов является прототипом, а степень сверки алгоритмов с оригинальными EXE указана в [матрице функций](docs/feature-matrix.md), [отчёте сравнения](docs/exe-comparison.md) и [TODO.md](TODO.md).
 
-## Требования
+## Быстрый запуск из исходников
 
-- Полный JDK 25 (компилятор `javac` также должен быть версии 25; одной Java runtime недостаточно).
-- Сеть при первом запуске Maven Wrapper, чтобы загрузить Maven и библиотеки.
+Нужен полный **JDK 25** — компилятор `javac` также должен быть версии 25. Проверить версии можно так:
 
-## Запуск
+```text
+java -version
+javac -version
+```
+
+Maven Wrapper сам скачает Maven и библиотеки при первом запуске, поэтому потребуется интернет. Склонируйте рабочую ветку `feat/java-mcp-lab-suite`:
+
+```bash
+git clone --branch feat/java-mcp-lab-suite --single-branch https://github.com/IlyaAndreev05/Real-time-information-systems.git
+cd Real-time-information-systems
+```
+
+### Linux (Ubuntu)
+
+Из корня репозитория запустите GUI:
 
 ```bash
 ./mvnw clean javafx:run
 ```
 
-Сборка приложения:
+Если Linux сообщает, что нет разрешения на запуск wrapper, выполните `chmod +x mvnw`, затем повторите команду.
+
+### macOS (Intel и Apple Silicon)
+
+Откройте Terminal, перейдите в корень репозитория и запустите GUI:
 
 ```bash
-./mvnw clean package
+./mvnw clean javafx:run
 ```
 
-Запуск MCP по stdio (для конфигурации MCP-клиента укажите команду `./mvnw -q exec:java -Dexec.args="--mcp-stdio"`):
+Та же команда подходит для Intel Mac и Apple Silicon. Maven загрузит зависимости JavaFX для текущей системы.
+
+### Windows 10/11
+
+Откройте PowerShell в каталоге репозитория и выполните:
+
+```powershell
+.\mvnw.cmd clean javafx:run
+```
+
+Если PowerShell открылся в другом каталоге, сначала перейдите в папку проекта командой `cd C:\путь\к\Real-time-information-systems`.
+
+## Готовые сборки с Java Runtime
+
+Для GUI можно скачать архив под свою систему на [странице сборок GitHub Actions](https://github.com/IlyaAndreev05/Real-time-information-systems/actions/workflows/ci.yml), открыв последний успешный запуск. В актуальной сборке проверены Linux x64, Windows x64, macOS Intel и macOS Apple Silicon. Архивы называются:
+
+- `rtis-lab-suite-linux-x64`
+- `rtis-lab-suite-windows-x64`
+- `rtis-lab-suite-macos-x64` — Intel Mac
+- `rtis-lab-suite-macos-arm64` — Apple Silicon
+
+Распакуйте архив и запустите приложение:
+
+- **Linux:** `RTIS Lab Suite/bin/RTIS Lab Suite`.
+- **Windows:** `RTIS Lab Suite/RTIS Lab Suite.exe`.
+- **macOS:** откройте `RTIS Lab Suite.app`. Пакет пока не подписан и не нотариализован: при предупреждении Gatekeeper нажмите правой кнопкой на приложение, выберите **Открыть** и подтвердите запуск.
+
+Эти app-image сборки содержат Java Runtime и предназначены для GUI. Архивы GitHub Actions временные и доступны ограниченный срок; если ссылка на артефакт истекла, запустите программу из исходников по инструкциям выше.
+
+## Режимы MCP
+
+### MCP без GUI (stdio)
+
+Этот режим предназначен для запуска серверного процесса самим MCP-клиентом. Запустите вручную для проверки:
+
+**Linux и macOS:**
 
 ```bash
-./mvnw -q exec:java -Dexec.args="--mcp-stdio"
+./mvnw -q exec:java -Dexec.args=--mcp-stdio
 ```
 
-Совместный режим запускает GUI и MCP по Streamable HTTP на `127.0.0.1:8765/mcp`:
+**Windows PowerShell:**
+
+```powershell
+.\mvnw.cmd -q exec:java '-Dexec.args=--mcp-stdio'
+```
+
+В режиме stdio окно не открывается. Чтобы агент мог самостоятельно запускать сервер, добавьте его в конфигурацию MCP-клиента. Пример ниже — для MCP-клиентов с форматом `mcpServers` и поддержкой поля `cwd`; замените путь на фактическую папку проекта.
+
+**Linux и macOS — пример JSON:**
+
+```json
+{
+  "mcpServers": {
+    "rtis-lab-suite": {
+      "command": "./mvnw",
+      "args": ["-q", "exec:java", "-Dexec.args=--mcp-stdio"],
+      "cwd": "/home/USER/Real-time-information-systems"
+    }
+  }
+}
+```
+
+**Windows — пример JSON:**
+
+```json
+{
+  "mcpServers": {
+    "rtis-lab-suite": {
+      "command": "cmd.exe",
+      "args": ["/c", "mvnw.cmd", "-q", "exec:java", "-Dexec.args=--mcp-stdio"],
+      "cwd": "C:\\Users\\USER\\Real-time-information-systems"
+    }
+  }
+}
+```
+
+Формат и расположение конфигурации отличаются у разных MCP-клиентов. Если клиент не поддерживает `cwd`, укажите полный путь к `mvnw`/`mvnw.cmd` и передайте Maven путь к `pom.xml` через параметр `-f`. Готовый шаблон для POSIX-систем также находится в [docs/mcp-config.example.json](docs/mcp-config.example.json).
+
+### GUI + MCP — общий проект и состояние
+
+Чтобы агент управлял проектом, открытым в GUI, запустите программу в совместном режиме. MCP-сервер слушает только локальный компьютер:
+
+**Linux и macOS:**
 
 ```bash
-./mvnw -q exec:java -Dexec.args="--mcp-http"
+./mvnw -q exec:java -Dexec.args=--mcp-http
 ```
 
-Все проекты пользователя хранятся в каталоге приложения (`~/.rtis-lab` на Linux/macOS или `%APPDATA%/RTIS Lab` на Windows). Формат проекта — версионированный JSON.
+**Windows PowerShell:**
+
+```powershell
+.\mvnw.cmd -q exec:java '-Dexec.args=--mcp-http'
+```
+
+В MCP-клиенте добавьте сервер типа **Streamable HTTP** с адресом:
+
+```text
+http://127.0.0.1:8765/mcp
+```
+
+Так GUI и агент используют один проект: изменения точек и параметров видны в окне, а агент может запускать расчёты, читать таблицы и метрики, импортировать/экспортировать проект и графики. Оставьте окно терминала открытым, пока пользуетесь сервером.
+
+### MCP по HTTP без GUI
+
+Если нужен HTTP-сервер, но окно не требуется, используйте вместо `--mcp-http` параметр `--mcp-http-only`:
+
+```bash
+./mvnw -q exec:java -Dexec.args=--mcp-http-only
+```
+
+В Windows PowerShell:
+
+```powershell
+.\mvnw.cmd -q exec:java '-Dexec.args=--mcp-http-only'
+```
+
+Адрес остаётся `http://127.0.0.1:8765/mcp`. Для совместной работы с открытым окном используйте именно GUI + MCP выше.
+
+MCP-каталог предоставляет операции для выбора модулей и алгоритмов, параметров, ручных точек и экспериментов, чтения результатов постранично, управления курсором и гармониками, а также импорта/экспорта проектов, таблиц и PNG-графиков.
+
+## Данные проекта
+
+Автосохранение хранится в `~/.rtis-lab` на Linux/macOS и `%APPDATA%/RTIS Lab` на Windows. Проекты имеют версионированный JSON-формат. Исходные EXE в репозиторий не включены.
 
 ## Исследованные оригиналы
 
-Функции и степень переноса отслеживаются в [матрице функций](docs/feature-matrix.md), незавершённые исследования — в [TODO.md](TODO.md). Сведения основаны на материалах ветки `semester-7-real-time-information-systems-labs` репозитория MyUniversity. Оригинальные EXE не включаются в этот проект.
+Подробный реестр функций и статусы переноса см. в [матрице функций](docs/feature-matrix.md), а результаты сравнения с доступными EXE и методическими материалами — в [отчёте сравнения](docs/exe-comparison.md). Оставшиеся исследования перечислены в [TODO.md](TODO.md).
