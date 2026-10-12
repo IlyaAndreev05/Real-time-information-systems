@@ -26,6 +26,7 @@ import java.awt.geom.Ellipse2D;
 import java.util.List;
 
 public final class ChartRenderer {
+    public record NamedSeries(String name, List<Point> points) { }
     private ChartRenderer() { }
 
     public static byte[] png(LabProject project, int width, int height) throws IOException {
@@ -81,6 +82,21 @@ public final class ChartRenderer {
             plot.addDomainMarker(cursor, Layer.FOREGROUND);
         }
         return chart;
+    }
+
+    public static byte[] comparisonPng(String title, String xAxis, String yAxis, List<NamedSeries> series,
+                                       int width, int height) throws IOException {
+        if (width < 200 || width > 8192 || height < 150 || height > 8192)
+            throw new IllegalArgumentException("Размер изображения вне диапазона 200–8192 × 150–8192");
+        XYSeriesCollection data = new XYSeriesCollection();
+        for (NamedSeries item : series) add(data, item.name(), item.points());
+        JFreeChart chart = ChartFactory.createXYLineChart(title, xAxis, yAxis, data,
+            PlotOrientation.VERTICAL, true, true, false);
+        style(chart, true);
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            ChartUtils.writeChartAsPNG(out, chart, width, height);
+            return out.toByteArray();
+        }
     }
 
     public static void savePng(LabProject project, Path destination, int width, int height) throws IOException {

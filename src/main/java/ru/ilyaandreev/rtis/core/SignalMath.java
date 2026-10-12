@@ -37,6 +37,67 @@ public final class SignalMath {
         return points;
     }
 
+    /** Reproducible test signal whose distribution and amplitudes are explicit in project metadata. */
+    public static List<Point> distribution(double duration, int count, double min, double max,
+                                           String law, long seed) {
+        requirePositive(duration, "Длительность");
+        requireCount(count);
+        if (!Double.isFinite(min) || !Double.isFinite(max) || !(max > min))
+            throw new IllegalArgumentException("Диапазон амплитуд должен быть конечным и ненулевым");
+        if (!"uniform".equals(law) && !"normal".equals(law))
+            throw new IllegalArgumentException("Закон распределения должен быть uniform или normal");
+        Random random = new Random(seed);
+        double mean = (min + max) / 2;
+        double sigma = (max - min) / 6;
+        List<Point> points = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            double y;
+            if ("uniform".equals(law)) y = min + random.nextDouble() * (max - min);
+            else {
+                // Truncated normal by rejection, avoiding artificial probability spikes at the limits.
+                do { y = mean + sigma * random.nextGaussian(); } while (y < min || y > max);
+            }
+            points.add(new Point(duration * i / (count - 1.0), y));
+        }
+        return List.copyOf(points);
+    }
+
+    /** Deterministic multi-tone test input with phase and time units in radians and seconds. */
+    public static List<Point> multiTone(double duration, int count, double... amplitudeFrequencyPhase) {
+        return composite(duration, count, amplitudeFrequencyPhase);
+    }
+
+    public static double rmse(List<Point> expected, List<Point> actual) {
+        requireSameGrid(expected, actual);
+        double sum = 0;
+        for (int i = 0; i < expected.size(); i++) sum += square(expected.get(i).y() - actual.get(i).y());
+        return Math.sqrt(sum / expected.size());
+    }
+
+    public static double maxAbsoluteError(List<Point> expected, List<Point> actual) {
+        requireSameGrid(expected, actual);
+        double max = 0;
+        for (int i = 0; i < expected.size(); i++) max = Math.max(max, Math.abs(expected.get(i).y() - actual.get(i).y()));
+        return max;
+    }
+
+    public static double amplitudeRange(List<Point> points) {
+        requireSignal(points);
+        double min = points.stream().mapToDouble(Point::y).min().orElseThrow();
+        double max = points.stream().mapToDouble(Point::y).max().orElseThrow();
+        return max - min;
+    }
+
+    private static void requireSameGrid(List<Point> expected, List<Point> actual) {
+        requireSignal(expected);
+        requireSignal(actual);
+        if (expected.size() != actual.size()) throw new IllegalArgumentException("Сигналы для сравнения должны иметь одинаковую длину");
+        for (int i = 0; i < expected.size(); i++) if (Double.compare(expected.get(i).x(), actual.get(i).x()) != 0)
+            throw new IllegalArgumentException("Сигналы для сравнения должны иметь одинаковые временные координаты");
+    }
+
+    private static double square(double value) { return value * value; }
+
     public static List<Point> sample(List<Point> input, int stride) {
         requireSignal(input);
         if (stride < 1) throw new IllegalArgumentException("Шаг дискретизации должен быть не меньше 1");

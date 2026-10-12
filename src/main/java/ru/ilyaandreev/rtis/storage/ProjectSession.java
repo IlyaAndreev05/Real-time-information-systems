@@ -32,6 +32,9 @@ public final class ProjectSession {
     }
 
     public static Path defaultAutosavePath() {
+        String configuredDirectory = System.getProperty("rtis.autosave.dir");
+        if (configuredDirectory != null && !configuredDirectory.isBlank())
+            return Path.of(configuredDirectory).resolve("last-project.json");
         String appData = System.getenv("APPDATA");
         Path root = appData != null && !appData.isBlank()
             ? Path.of(appData, "RTIS Lab")

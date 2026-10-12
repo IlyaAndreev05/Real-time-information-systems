@@ -107,8 +107,9 @@ public class App extends Application {
         session.addListener(p -> Platform.runLater(() -> render(p)));
         if (getParameters().getRaw().contains("--mcp-http")) {
             mcp = new McpControlServer(session, projectStore, this::snapshotWindow);
-            mcp.startHttp(8765);
-            status.setText("GUI и MCP активны · http://127.0.0.1:8765/mcp");
+            int port = Integer.parseInt(System.getProperty("rtis.mcp.port", "8765"));
+            mcp.startHttp(port);
+            status.setText("GUI и MCP активны · http://127.0.0.1:" + port + "/mcp");
         }
     }
 

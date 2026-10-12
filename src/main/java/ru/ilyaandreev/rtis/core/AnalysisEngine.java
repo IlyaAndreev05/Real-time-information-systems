@@ -18,6 +18,24 @@ public final class AnalysisEngine {
 
     private AnalysisEngine() { }
 
+    /** Return transmitted quantized knots for a compression project without changing its saved state. */
+    public static List<Point> compressionKnots(LabProject project) {
+        String algorithm = project.getAlgorithmId();
+        if (!List.of("compression-zero-order", "compression-linear", "extrapolation-fixed", "extrapolation-floating", "extrapolation-linear").contains(algorithm))
+            throw new IllegalArgumentException("Текущий проект не использует алгоритм сжатия");
+        List<Point> source = project.getInput();
+        SignalMath.requireSignal(source);
+        Map<String, Double> p = project.getParameters();
+        int bits = integer(p, "bits", 8);
+        double[] signalRange = range(source);
+        double min = p.getOrDefault("fullScaleMin", signalRange[0]);
+        double max = p.getOrDefault("fullScaleMax", signalRange[1]);
+        if (!(max > min)) throw new IllegalArgumentException("Шкала АЦП должна задавать положительный диапазон");
+        double aperture = p.getOrDefault("aperture", 1.0) * (max - min) / ((1L << bits) - 1);
+        return compress(SignalMath.quantize(source, bits, min, max), aperture,
+            integer(p, "maxGap", 32), algorithm, () -> false).knots();
+    }
+
     public static ExperimentResult run(LabProject project, long inputRevision, BooleanSupplier cancelled) {
         List<Point> source = project.getInput();
         SignalMath.requireSignal(source);
@@ -34,38 +52,69 @@ public final class AnalysisEngine {
                 output = algorithm.equals("sample-hold") ? SignalMath.stepInterpolate(knots, xs) : SignalMath.linearInterpolate(knots, xs);
                 addInterpolationMetrics(project, knots, output, metrics);
             }
-            case "quantize", "adc-dac", "quantization-error" -> {
+            case "quantize" -> {
                 int bits = integer(p, "bits", 8);
                 double[] range = range(source);
-                double min = p.getOrDefault("min", range[0]), max = p.getOrDefault("max", range[1]);
+                double min = p.getOrDefault("fullScaleMin", range[0]), max = p.getOrDefault("fullScaleMax", range[1]);
                 output = SignalMath.quantize(source, bits, min, max);
                 metrics.put("бит", (double) bits);
                 metrics.put("шагКвантования", (max - min) / ((1L << bits) - 1));
                 metrics.put("теоретическаяМаксПогрешность", (max - min) / (2 * ((1L << bits) - 1)));
             }
-            case "step-interpolation", "linear-interpolation", "cubic-spline" -> {
+            case "adc-dac", "quantization-error" -> {
+                String[] errors = {"none", "additive", "multiplicative", "integral", "differential", "combined"};
+                int errorMode = integer(p, "errorMode", 0);
+                if (errorMode < 0 || errorMode >= errors.length) throw new IllegalArgumentException("errorMode должен быть от 0 до 5");
+                int bits = integer(p, "bits", 8);
+                double[] signalRange = range(source);
+                var conversion = AdcModel.convert(source, p.getOrDefault("sampleInterval", medianInterval(source)), bits,
+                    p.getOrDefault("fullScaleMin", signalRange[0]), p.getOrDefault("fullScaleMax", signalRange[1]),
+                    integer(p, "reconstructionMode", 0) == 1 ? "linear" : "step", errors[errorMode],
+                    p.getOrDefault("errorPercent", 0.0), integer(p, "differentialBit", 0));
+                output = conversion.reconstructed();
+                metrics.putAll(conversion.metrics());
+                metrics.put("типИнструментальнойОшибки", (double) errorMode);
+            }
+            case "step-interpolation", "linear-interpolation", "cubic-spline", "progressive-interpolation" -> {
                 List<Point> knots = interpolationKnots(project, source, p);
                 List<Double> xs = interpolationXValues(project, source);
                 output = switch (algorithm) {
                     case "step-interpolation" -> SignalMath.stepInterpolate(knots, xs);
                     case "linear-interpolation" -> SignalMath.linearInterpolate(knots, xs);
+                    case "progressive-interpolation" -> progressiveInterpolate(source,
+                        integer(p, "firstStep", 10), integer(p, "secondStep", 5), cancelled);
                     default -> SignalMath.cubicSpline(knots, xs);
                 };
                 addInterpolationMetrics(project, knots, output, metrics);
             }
             case "add-noise" -> output = SignalMath.addGaussianNoise(source, p.getOrDefault("standardDeviation", 0.1), project.getNoiseSeed());
-            case "moving-average" -> output = movingAverage(source, integer(p, "window", 5), cancelled);
+            case "moving-average" -> output = movingAverage(source, integer(p, "window", 5),
+                integer(p, "sampleIndex", 0), integer(p, "useFilteredValues", 0) == 1, cancelled);
             case "first-order-filter" -> output = firstOrderFilter(source, p.getOrDefault("alpha", 0.25), cancelled);
+            case "optimal-filter" -> output = optimalFilter(source, integer(p, "order", 4), cancelled);
+            case "low-pass" -> output = lowPass(source, integer(p, "cutoffHarmonic", 10), cancelled);
             case "compression-zero-order", "compression-linear", "extrapolation-fixed", "extrapolation-floating", "extrapolation-linear" -> {
-                double aperture = p.getOrDefault("aperture", 0.1);
-                Compression compression = compress(source, aperture, integer(p, "maxGap", 32), algorithm, cancelled);
-                output = compression.knots();
-                metrics.put("коэффициентСжатия", source.size() / (double) output.size());
+                int bits = integer(p, "bits", 8);
+                double[] signalRange = range(source);
+                double fullScaleMin = p.getOrDefault("fullScaleMin", signalRange[0]);
+                double fullScaleMax = p.getOrDefault("fullScaleMax", signalRange[1]);
+                if (!(fullScaleMax > fullScaleMin)) throw new IllegalArgumentException("Шкала АЦП должна задавать положительный диапазон");
+                double fullScale = fullScaleMax - fullScaleMin;
+                double aperture = p.getOrDefault("aperture", 1.0) * fullScale / ((1L << bits) - 1);
+                List<Point> digitized = SignalMath.quantize(source, bits, fullScaleMin, fullScaleMax);
+                Compression compression = compress(digitized, aperture, integer(p, "maxGap", 32), algorithm, cancelled);
+                output = compression.reconstructed();
+                metrics.put("коэффициентСжатия", source.size() / (double) compression.knots().size());
                 metrics.put("исходныхТочек", (double) source.size());
-                metrics.put("сохранённыхТочек", (double) output.size());
+                metrics.put("сохранённыхТочек", (double) compression.knots().size());
                 metrics.put("апертура", aperture);
+                metrics.put("квантовАпертуры", p.getOrDefault("aperture", 1.0));
                 metrics.put("среднеквадратичнаяОшибка", rmse(source, compression.reconstructed()));
                 metrics.put("максимальнаяОшибка", maxError(source, compression.reconstructed()));
+                metrics.put("ошибкаКвантованияСКО", rmse(source, digitized));
+                metrics.put("ошибкаКвантованияМакс", maxError(source, digitized));
+                metrics.put("СКОВосстановленияОтЦифровогоСигнала", rmse(digitized, compression.reconstructed()));
+                metrics.put("максимальнаяОшибкаВосстановленияОтЦифровогоСигнала", maxError(digitized, compression.reconstructed()));
             }
             default -> throw new IllegalArgumentException("Алгоритм пока не реализован: " + algorithm);
         }
@@ -161,14 +210,27 @@ public final class AnalysisEngine {
     }
 
     private static List<Point> movingAverage(List<Point> input, int window, BooleanSupplier cancelled) {
+        return movingAverage(input, window, 0, false, cancelled);
+    }
+
+    private static List<Point> movingAverage(List<Point> input, int window, int sampleIndex,
+                                             boolean useFilteredValues, BooleanSupplier cancelled) {
         if (window < 1 || window > input.size()) throw new IllegalArgumentException("Окно фильтра должно быть от 1 до числа точек");
-        List<Point> out = new ArrayList<>(input.size());
-        double sum = 0;
+        if (sampleIndex < 0 || sampleIndex >= window) throw new IllegalArgumentException("Номер выборки должен быть от 0 до N−1");
+        double[] filtered = new double[input.size()];
         for (int i = 0; i < input.size(); i++) {
             checkCancelled(cancelled);
-            sum += input.get(i).y();
-            if (i >= window) sum -= input.get(i - window).y();
-            out.add(new Point(input.get(i).x(), sum / Math.min(i + 1, window)));
+            double sum = 0;
+            for (int j = Math.max(0, i - window + 1); j <= i; j++)
+                sum += useFilteredValues && j < i ? filtered[j] : input.get(j).y();
+            filtered[i] = sum / Math.min(window, i + 1);
+        }
+        List<Point> out = new ArrayList<>(input.size());
+        for (int i = 0; i < input.size(); i++) {
+            // The PDF names j but does not define it. The Java contract binds each mean to
+            // sample k-j inside its causal N-sample window; j changes the output timestamp only.
+            int sourceIndex = Math.min(input.size() - 1, i + window - 1 - sampleIndex);
+            out.add(new Point(input.get(i).x(), filtered[sourceIndex]));
         }
         return out;
     }
@@ -183,6 +245,115 @@ public final class AnalysisEngine {
             out.add(new Point(point.x(), y));
         }
         return out;
+    }
+
+    private static List<Point> optimalFilter(List<Point> input, int order, BooleanSupplier cancelled) {
+        if (order < 0 || order > 14) throw new IllegalArgumentException("Параметр оптимального фильтра должен быть от 0 до 14");
+        double currentWeight = 1.0 / (1L << order);
+        List<Point> out = new ArrayList<>(input.size());
+        double y = input.getFirst().y();
+        for (int i = 0; i < input.size(); i++) {
+            checkCancelled(cancelled);
+            Point point = input.get(i);
+            y += currentWeight * (point.y() - y);
+            out.add(new Point(point.x(), y));
+        }
+        return out;
+    }
+
+    private static List<Point> progressiveInterpolate(List<Point> input, int firstStep, int secondStep,
+                                                       BooleanSupplier cancelled) {
+        if (firstStep < 1 || firstStep > 200 || secondStep < 1 || secondStep > 50)
+            throw new IllegalArgumentException("Шаги прогрессивной интерполяции вне методического диапазона");
+        List<Point> first = averageBlocks(input, firstStep, cancelled);
+        List<Point> second = averageBlocks(first, secondStep, cancelled);
+        return SignalMath.linearInterpolate(second, xValues(input));
+    }
+
+    private static List<Point> averageBlocks(List<Point> input, int blockSize, BooleanSupplier cancelled) {
+        List<Point> out = new ArrayList<>();
+        for (int from = 0; from < input.size(); from += blockSize) {
+            checkCancelled(cancelled);
+            int to = Math.min(input.size(), from + blockSize);
+            double x = 0, y = 0;
+            for (int i = from; i < to; i++) { x += input.get(i).x(); y += input.get(i).y(); }
+            x /= (to - from);
+            if (from == 0) x = input.getFirst().x();
+            if (to == input.size()) x = input.getLast().x();
+            out.add(new Point(x, y / (to - from)));
+        }
+        // A single full-width block represents a constant average over the complete time range.
+        if (out.size() == 1 && input.size() > 1) {
+            double average = out.getFirst().y();
+            out.set(0, new Point(input.getFirst().x(), average));
+            out.add(new Point(input.getLast().x(), average));
+        }
+        return List.copyOf(out);
+    }
+
+    /** Ideal brick-wall low-pass filter in the DFT domain; cutoff is a nonnegative DFT bin. */
+    private static List<Point> lowPass(List<Point> input, int cutoffHarmonic, BooleanSupplier cancelled) {
+        if (cutoffHarmonic < 0) throw new IllegalArgumentException("Гармоника среза должна быть неотрицательной");
+        int n = input.size();
+        if (n > 10000) throw new IllegalArgumentException("Для прямого расчёта ФНЧ ограничьте сигнал 10000 точками");
+        double dt = medianInterval(input);
+        double tolerance = Math.max(1e-12, Math.abs(dt) * 1e-7);
+        for (int i = 1; i < n - 1; i++) if (Math.abs((input.get(i + 1).x() - input.get(i).x()) - dt) > tolerance)
+            throw new IllegalArgumentException("Спектральный ФНЧ требует равномерных временных отсчётов");
+        int size = 1;
+        while (size < n) size <<= 1;
+        double[] real = new double[size], imag = new double[size];
+        for (int i = 0; i < n; i++) real[i] = input.get(i).y();
+        fft(real, imag, false, cancelled);
+        double cutoffHz = cutoffHarmonic / (n * dt);
+        for (int k = 0; k < size; k++)
+            if (Math.min(k, size - k) / (size * dt) > cutoffHz) { real[k] = 0; imag[k] = 0; }
+        fft(real, imag, true, cancelled);
+        List<Point> out = new ArrayList<>(n);
+        for (int j = 0; j < n; j++) {
+            checkCancelled(cancelled);
+            out.add(new Point(input.get(j).x(), real[j]));
+        }
+        return out;
+    }
+
+    private static void fft(double[] real, double[] imag, boolean inverse, BooleanSupplier cancelled) {
+        int n = real.length;
+        for (int i = 1, j = 0; i < n; i++) {
+            int bit = n >>> 1;
+            for (; (j & bit) != 0; bit >>>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) {
+                double swap = real[i]; real[i] = real[j]; real[j] = swap;
+                swap = imag[i]; imag[i] = imag[j]; imag[j] = swap;
+            }
+        }
+        for (int length = 2; length <= n; length <<= 1) {
+            checkCancelled(cancelled);
+            double angle = (inverse ? 2 : -2) * Math.PI / length;
+            double stepRe = Math.cos(angle), stepIm = Math.sin(angle);
+            for (int start = 0; start < n; start += length) {
+                double wRe = 1, wIm = 0;
+                for (int j = 0; j < length / 2; j++) {
+                    int even = start + j, odd = even + length / 2;
+                    double oddRe = real[odd] * wRe - imag[odd] * wIm;
+                    double oddIm = real[odd] * wIm + imag[odd] * wRe;
+                    real[odd] = real[even] - oddRe; imag[odd] = imag[even] - oddIm;
+                    real[even] += oddRe; imag[even] += oddIm;
+                    double next = wRe * stepRe - wIm * stepIm;
+                    wIm = wRe * stepIm + wIm * stepRe; wRe = next;
+                }
+            }
+        }
+        if (inverse) for (int i = 0; i < n; i++) { real[i] /= n; imag[i] /= n; }
+    }
+
+    private static double medianInterval(List<Point> input) {
+        if (input.size() < 2) throw new IllegalArgumentException("Для определения временного шага нужны два отсчёта");
+        double[] intervals = new double[input.size() - 1];
+        for (int i = 0; i < intervals.length; i++) intervals[i] = input.get(i + 1).x() - input.get(i).x();
+        java.util.Arrays.sort(intervals);
+        return intervals[intervals.length / 2];
     }
 
     private record Compression(List<Point> knots, List<Point> reconstructed) { }
@@ -202,9 +373,25 @@ public final class AnalysisEngine {
                 Point a = input.get(anchor), b = input.get(candidate);
                 for (int j = anchor + 1; j < candidate; j++) {
                     double u = (input.get(j).x() - a.x()) / (b.x() - a.x());
-                    double predicted = algorithm.equals("compression-zero-order") || algorithm.equals("extrapolation-fixed") || algorithm.equals("extrapolation-floating")
-                        ? a.y() : a.y() + u * (b.y() - a.y());
+                    double predicted;
+                    if (algorithm.equals("extrapolation-fixed")) predicted = input.getFirst().y();
+                    else if (algorithm.equals("extrapolation-floating")) predicted = a.y();
+                    else if (algorithm.equals("extrapolation-linear") && knots.size() > 1) {
+                        Point previous = knots.get(knots.size() - 2);
+                        double slope = (a.y() - previous.y()) / (a.x() - previous.x());
+                        predicted = a.y() + slope * (input.get(j).x() - a.x());
+                    } else predicted = algorithm.equals("compression-zero-order") ? a.y() : a.y() + u * (b.y() - a.y());
                     maxDeviation = Math.max(maxDeviation, Math.abs(input.get(j).y() - predicted));
+                }
+                if (algorithm.startsWith("extrapolation-") && candidate < input.size() - 1) {
+                    double predicted;
+                    if (algorithm.equals("extrapolation-fixed")) predicted = input.getFirst().y();
+                    else if (algorithm.equals("extrapolation-linear") && knots.size() > 1) {
+                        Point previous = knots.get(knots.size() - 2), anchorPoint = input.get(anchor);
+                        predicted = anchorPoint.y() + (anchorPoint.y() - previous.y()) / (anchorPoint.x() - previous.x())
+                            * (input.get(candidate).x() - anchorPoint.x());
+                    } else predicted = input.get(anchor).y();
+                    maxDeviation = Math.max(maxDeviation, Math.abs(input.get(candidate).y() - predicted));
                 }
                 if (maxDeviation > aperture && candidate > anchor + 1) break;
                 accepted = candidate;
@@ -214,10 +401,49 @@ public final class AnalysisEngine {
             anchor = accepted;
             knots.add(input.get(anchor));
         }
-        List<Double> x = xValues(input);
-        List<Point> reconstructed = algorithm.equals("compression-zero-order") || algorithm.equals("extrapolation-fixed") || algorithm.equals("extrapolation-floating")
-            ? SignalMath.stepInterpolate(knots, x) : SignalMath.linearInterpolate(knots, x);
+        List<Point> reconstructed;
+        if (algorithm.equals("extrapolation-linear")) {
+            reconstructed = extrapolateLinear(input, knots, cancelled);
+        } else {
+            List<Double> x = xValues(input);
+            reconstructed = algorithm.equals("extrapolation-fixed")
+                ? fixedApertureReconstruction(input, knots, cancelled)
+                : algorithm.equals("compression-zero-order") || algorithm.equals("extrapolation-floating")
+                    ? SignalMath.stepInterpolate(knots, x) : SignalMath.linearInterpolate(knots, x);
+        }
         return new Compression(List.copyOf(knots), reconstructed);
+    }
+
+    private static List<Point> extrapolateLinear(List<Point> input, List<Point> knots, BooleanSupplier cancelled) {
+        List<Point> output = new ArrayList<>(input.size());
+        int transmitted = 0;
+        for (Point point : input) {
+            checkCancelled(cancelled);
+            while (transmitted + 1 < knots.size() && knots.get(transmitted + 1).x() <= point.x()) transmitted++;
+            Point anchor = knots.get(transmitted);
+            double y = anchor.y();
+            if (transmitted > 0) {
+                Point previous = knots.get(transmitted - 1);
+                double slope = (anchor.y() - previous.y()) / (anchor.x() - previous.x());
+                y += slope * (point.x() - anchor.x());
+            }
+            output.add(new Point(point.x(), y));
+        }
+        return List.copyOf(output);
+    }
+
+    private static List<Point> fixedApertureReconstruction(List<Point> input, List<Point> knots, BooleanSupplier cancelled) {
+        List<Point> output = new ArrayList<>(input.size());
+        int transmitted = 0;
+        double fixedCenter = knots.getFirst().y();
+        for (Point point : input) {
+            checkCancelled(cancelled);
+            if (transmitted < knots.size() && knots.get(transmitted).x() == point.x()) {
+                output.add(new Point(point.x(), knots.get(transmitted).y()));
+                transmitted++;
+            } else output.add(new Point(point.x(), fixedCenter));
+        }
+        return List.copyOf(output);
     }
 
     private static List<Double> xValues(List<Point> points) { return points.stream().map(Point::x).toList(); }
